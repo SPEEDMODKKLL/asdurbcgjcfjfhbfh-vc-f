@@ -1,0 +1,384 @@
+name: 🛸 DorkUtils Pro + RDP 24/7
+
+on:
+  workflow_dispatch:
+    inputs:
+      password:
+        description: 'RDP Password'
+        required: true
+        default: 'admin@123'
+      rdp_time:
+        description: 'RDP Duration (minutes)'
+        required: true
+        default: '360'
+
+jobs:
+  deploy-rdp-with-dorkutils:
+    runs-on: windows-latest
+    timeout-minutes: 4320  # 72 ساعة كحد أقصى
+    defaults:
+      run:
+        shell: powershell
+
+    steps:
+      # ======================== 1. إعداد RDP ========================
+      - name: ⚙️ Configure RDP Settings
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+          netsh advfirewall firewall add rule name="RDP-Port" dir=in action=allow protocol=TCP localport=3389
+          Restart-Service -Name TermService -Force
+
+      # ======================== 2. إنشاء المستخدم ========================
+      - name: 👤 Create RDP User
+        run: |
+          $password = "${{ github.event.inputs.password || 'admin@123' }}"
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+
+          # حذف المستخدم القديم إذا موجود
+          if (Get-LocalUser -Name "DORKUSER" -ErrorAction SilentlyContinue) {
+              Remove-LocalUser -Name "DORKUSER" -Force
+          }
+
+          # إنشاء مستخدم جديد
+          New-LocalUser -Name "DORKUSER" -Password $securePass -AccountNeverExpires -FullName "DorkUtils Pro User"
+          Add-LocalGroupMember -Group "Administrators" -Member "DORKUSER"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "DORKUSER"
+
+          Write-Host "✅ User created: DORKUSER / $password"
+
+      # ======================== 3. تثبيت Python ========================
+      - name: 🐍 Install Python 3
+        run: |
+          $pythonUrl = "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe"
+          $installer = "$env:TEMP\python-installer.exe"
+          
+          Write-Host "📥 Downloading Python..."
+          Invoke-WebRequest -Uri $pythonUrl -OutFile $installer -UseBasicParsing
+          
+          Write-Host "⚙️ Installing Python..."
+          Start-Process -FilePath $installer -ArgumentList "/quiet", "InstallAllUsers=1", "PrependPath=1", "Include_test=0" -Wait -NoNewWindow
+          
+          Remove-Item $installer -Force
+          Write-Host "✅ Python installed!"
+
+      # ======================== 4. تحميل أداة DorkUtils ========================
+      - name: 📥 Download DorkUtils Pro
+        run: |
+          $dorkDir = "C:\DorkUtils"
+          New-Item -ItemType Directory -Force -Path $dorkDir
+          
+          # إنشاء السكريبت مباشرة
+          $scriptContent = @'
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+████████╗███████╗██╗  ██╗████████╗██╗   ██╗████████╗██╗██╗     ███████╗
+╚══██╔══╝██╔════╝╚██╗██╔╝╚══██╔══╝██║   ██║╚══██╔══╝██║██║     ██╔════╝
+   ██║   █████╗   ╚███╔╝    ██║   ██║   ██║   ██║   ██║██║     ███████╗
+   ██║   ██╔══╝   ██╔██╗    ██║   ██║   ██║   ██║   ██║██║     ╚════██║
+   ██║   ███████╗██╔╝ ██╗   ██║   ╚██████╔╝   ██║   ██║███████╗███████║
+   ╚═╝   ╚══════╝╚═╝  ╚═╝   ╚═╝    ╚═════╝    ╚═╝   ╚═╝╚══════╝╚══════╝
+  ╔══════════════════════════════════════════════════════════════════════╗
+  ║            DorkUtils Pro - Dork File Organizer & Manager            ║
+  ║               RDP Ready Version - v3.0                             ║
+  ╚══════════════════════════════════════════════════════════════════════╝
+"""
+
+import os, sys, re, random, time
+from collections import Counter
+from datetime import datetime
+
+CLR = {'R':'\033[91m','G':'\033[92m','Y':'\033[93m','B':'\033[94m','C':'\033[96m','M':'\033[95m','W':'\033[97m','D':'\033[2m','BO':'\033[1m','E':'\033[0m'}
+
+def p(c, msg):
+    print(f"{CLR[c]}{msg}{CLR['E']}")
+
+def clear():
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+DATA = []
+FILE_NAME = ""
+DIR = "C:\\DorkUtils"
+
+def banner():
+    clear()
+    print(f"""{CLR['R']}{CLR['BO']}
+████████╗███████╗██╗  ██╗████████╗██╗   ██╗████████╗██╗██╗     ███████╗
+╚══██╔══╝██╔════╝╚██╗██╔╝╚══██╔══╝██║   ██║╚══██╔══╝██║██║     ██╔════╝
+   ██║   █████╗   ╚███╔╝    ██║   ██║   ██║   ██║   ██║██║     ███████╗
+   ██║   ██╔══╝   ██╔██╗    ██║   ██║   ██║   ██║   ██║██║     ╚════██║
+   ██║   ███████╗██╔╝ ██╗   ██║   ╚██████╔╝   ██║   ██║███████╗███████║
+   ╚═╝   ╚══════╝╚═╝  ╚═╝   ╚═╝    ╚═════╝    ╚═╝   ╚═╝╚══════╝╚══════╝{CLR['E']}
+{CLR['C']}╔══════════════════════════════════════════════════════════════╗{CLR['E']}
+{CLR['C']}║{CLR['W']}       DorkUtils Pro - RDP Ready - v3.0{CLR['C']}                    ║{CLR['E']}
+{CLR['C']}║{CLR['Y']}       🖥️ RDP: DORKUSER  |  🔧 شغال 24/7{CLR['C']}               ║{CLR['E']}
+{CLR['C']}╚══════════════════════════════════════════════════════════════╝{CLR['E']}
+""")
+
+def load_file():
+    global DATA, FILE_NAME
+    fname = input(f"{CLR['Y']}[?] اسم ملف الدوركس (مع المسار) أو Enter للقائمة: {CLR['E']}").strip()
+    if not fname:
+        # عرض ملفات في المجلد
+        files = [f for f in os.listdir(DIR) if f.endswith('.txt')]
+        if files:
+            p('C', "الملفات المتوفرة:")
+            for i, f in enumerate(files, 1):
+                print(f"  {CLR['G']}[{i}]{CLR['E']} {f}")
+            choice = input(f"\n{CLR['Y']}[?] اختر رقم الملف: {CLR['E']}").strip()
+            try:
+                fname = os.path.join(DIR, files[int(choice)-1])
+            except:
+                p('R', "خطأ في الاختيار")
+                return
+        else:
+            p('R', "لا توجد ملفات .txt في C:\\DorkUtils")
+            return
+    
+    if not os.path.exists(fname):
+        p('R', f"الملف غير موجود: {fname}")
+        return
+    
+    with open(fname, 'r', encoding='utf-8', errors='ignore') as f:
+        DATA = [l.rstrip('\n\r') for l in f.readlines()]
+    FILE_NAME = os.path.basename(fname)
+    p('G', f"✅ تم تحميل: {FILE_NAME} ({len(DATA):,} سطر)")
+
+def save():
+    global DATA
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    fname = os.path.join(DIR, f"dorks_organized_{ts}.txt")
+    with open(fname, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(DATA) + '\n')
+    p('G', f"💾 تم الحفظ: {fname} ({len(DATA):,} سطر)")
+
+def remove_empty():
+    global DATA
+    before = len(DATA)
+    DATA = [l for l in DATA if l.strip()]
+    print(f"  {CLR['G']}✅{CLR['E']} إزالة فراغات: {CLR['G']}{before-len(DATA):,}{CLR['E']} تم الحذف")
+
+def remove_dupes():
+    global DATA
+    before = len(DATA)
+    seen = set(); unique = []
+    for l in DATA:
+        k = l.strip().lower()
+        if k and k not in seen:
+            seen.add(k); unique.append(l)
+    DATA = unique
+    print(f"  {CLR['G']}✅{CLR['E']} إزالة تكرار: {CLR['G']}{before-len(DATA):,}{CLR['E']} تم الحذف | {CLR['BO']}{len(DATA):,}{CLR['E']} متبقي")
+
+def sort_az():
+    global DATA
+    DATA.sort(key=lambda x: x.strip().lower())
+    p('G', "  ✅ ترتيب A-Z")
+
+def sort_za():
+    global DATA
+    DATA.sort(key=lambda x: x.strip().lower(), reverse=True)
+    p('G', "  ✅ ترتيب Z-A")
+
+def randomize_f():
+    global DATA
+    random.shuffle(DATA)
+    p('G', "  ✅ تدوير عشوائي")
+
+def reverse_f():
+    global DATA
+    DATA.reverse()
+    p('G', "  ✅ عكس الترتيب")
+
+def stats():
+    if not DATA:
+        p('Y', "لا توجد بيانات")
+        return
+    total = len(DATA)
+    non_empty = sum(1 for l in DATA if l.strip())
+    dork_count = sum(1 for l in DATA if any(x in l.lower() for x in ['intitle:','inurl:','site:','filetype:']))
+    words = []
+    for l in DATA:
+        words.extend(l.strip().lower().split())
+    common = Counter(words).most_common(10)
+    
+    print(f"""
+{CLR['C']}╔══════════════════════════════════════╗{CLR['E']}
+{CLR['C']}║{CLR['BO']}           📊 الإحصائيات{CLR['E']}              {CLR['C']}║{CLR['E']}
+{CLR['C']}╠══════════════════════════════════════╣{CLR['E']}
+{CLR['C']}║{CLR['E']} الملف:          {CLR['BO']}{FILE_NAME}{CLR['E']}
+{CLR['C']}║{CLR['E']} الأسطر:         {CLR['BO']}{total:>10,}{CLR['E']}
+{CLR['C']}║{CLR['E']} غير فارغة:      {CLR['BO']}{non_empty:>10,}{CLR['E']}
+{CLR['C']}║{CLR['E']} دوركس:          {CLR['BO']}{dork_count:>10,}{CLR['E']}
+{CLR['C']}╠══════════════════════════════════════╣{CLR['E']}
+{CLR['C']}║{CLR['BO']}  🔥 أكثر الكلمات{CLR['E']}                    {CLR['C']}║{CLR['E']}
+{CLR['C']}╠══════════════════════════════════════╣{CLR['E']}""")
+    for word, count in common:
+        print(f"{CLR['C']}║{CLR['E']} {word:<20} {count:>6}")
+    print(f"{CLR['C']}╚══════════════════════════════════════╝{CLR['E']}")
+
+def run_all():
+    """تشغيل كل العمليات"""
+    print(f"\n{CLR['Y']}{CLR['BO']}🚀 RUN ALL OPERATIONS...{CLR['E']}\n")
+    remove_empty()
+    time.sleep(0.3)
+    remove_dupes()
+    time.sleep(0.3)
+    sort_az()
+    time.sleep(0.3)
+    save()
+    print(f"\n{CLR['G']}{CLR['BO']}🎉 تم بنجاح!{CLR['E']}")
+
+def menu():
+    banner()
+    if FILE_NAME:
+        p('C', f"📂 {CLR['BO']}{FILE_NAME}{CLR['E']} | {CLR['G']}{len(DATA):,}{CLR['E']} سطر")
+    print(f"""
+  {CLR['BO']}القائمة:{CLR['E']}
+  {CLR['G']}[1]{CLR['E']} 📥 تحميل ملف دوركس
+  {CLR['G']}[2]{CLR['E']} 💾 حفظ الملف
+  {CLR['G']}[3]{CLR['E']} 📊 إحصائيات
+  {CLR['M']}[4]{CLR['E']} 🗑 إزالة فراغات
+  {CLR['M']}[5]{CLR['E']} 🔄 إزالة تكرار
+  {CLR['M']}[6]{CLR['E']} 🔤 ترتيب A-Z
+  {CLR['M']}[7]{CLR['E']} 🔤 ترتيب Z-A
+  {CLR['M']}[8]{CLR['E']} 🔀 تدوير عشوائي
+  {CLR['M']}[9]{CLR['E']} 🔃 عكس الترتيب
+  {CLR['Y']}[00]{CLR['E']} 🚀 RUN ALL (تشغيل الكل)
+  {CLR['R']}[99]{CLR['E']} 🚪 خروج
+""")
+
+def main():
+    global DATA
+    while True:
+        menu()
+        choice = input(f"{CLR['Y']}╰━ اختر: {CLR['E']}").strip()
+        ops = {
+            '1': load_file, '2': save, '3': stats,
+            '4': remove_empty, '5': remove_dupes,
+            '6': sort_az, '7': sort_za,
+            '8': randomize_f, '9': reverse_f,
+            '00': run_all, '99': lambda: sys.exit(0)
+        }
+        if choice in ops:
+            try:
+                ops[choice]()
+                if choice not in ['1','2','99']:
+                    input(f"\n{CLR['Y']}اضغط Enter...{CLR['E']}")
+            except Exception as e:
+                p('R', f"خطأ: {e}")
+                input(f"{CLR['Y']}اضغط Enter...{CLR['E']}")
+        else:
+            p('R', "خيار غير صحيح")
+            time.sleep(1)
+
+if __name__ == '__main__':
+    os.makedirs(DIR, exist_ok=True)
+    try:
+        main()
+    except KeyboardInterrupt:
+        print(f"\n{CLR['R']}وداعاً!{CLR['E']}")
+'@
+          
+          $scriptPath = "$dorkDir\dorkutils_rdp.py"
+          Set-Content -Path $scriptPath -Value $scriptContent -Force
+          Write-Host "✅ DorkUtils Pro downloaded to $scriptPath"
+
+      # ======================== 5. إنشاء Shortcut على سطح المكتب ========================
+      - name: 📌 Create Desktop Shortcuts
+        run: |
+          $desktop = [Environment]::GetFolderPath('Desktop')
+          $wsh = New-Object -ComObject WScript.Shell
+          
+          # Shortcut للسكريبت
+          $sc = $wsh.CreateShortcut("$desktop\DorkUtils Pro.lnk")
+          $sc.TargetPath = "C:\Python311\python.exe"
+          $sc.Arguments = "C:\DorkUtils\dorkutils_rdp.py"
+          $sc.WorkingDirectory = "C:\DorkUtils"
+          $sc.Description = "DorkUtils Pro - Dork Organizer"
+          $sc.Save()
+          
+          # Shortcut لمجلد الدوركس
+          $sc2 = $wsh.CreateShortcut("$desktop\DorkUtils Folder.lnk")
+          $sc2.TargetPath = "C:\DorkUtils"
+          $sc2.Save()
+          
+          Write-Host "✅ Desktop shortcuts created!"
+
+      # ======================== 6. تحميل دوركس تجريبية ========================
+      - name: 📥 Download Sample Dorks
+        run: |
+          $dorkUrl = "https://raw.githubusercontent.com/sundowndev/Google-Dorks/main/dorks.txt"
+          $outPath = "C:\DorkUtils\sample_dorks.txt"
+          
+          try {
+              Invoke-WebRequest -Uri $dorkUrl -OutFile $outPath -UseBasicParsing
+              Write-Host "✅ Sample dorks downloaded!"
+          } catch {
+              # إذا فشل، أنشئ ملف تجريبي
+              $sample = @"
+site:example.com intitle:login
+site:target.com inurl:admin
+site:test.com filetype:pdf
+"@
+              Set-Content -Path $outPath -Value $sample
+              Write-Host "📝 Sample dorks created locally"
+          }
+
+      # ======================== 7. تايلسكيل (اختياري) ========================
+      - name: 🔗 Install Tailscale (Optional for external access)
+        if: false  # فعّل لو تبي اتصال خارجي
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installer = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installer
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installer`"", "/quiet", "/norestart" -Wait
+
+      # ======================== 8. البقاء على قيد الحياة + عرض المعلومات ========================
+      - name: 🎯 RDP Active - Display Connection Info
+        run: |
+          $password = "${{ github.event.inputs.password || 'admin@123' }}"
+          $hostname = hostname
+          $ip = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.InterfaceAlias -notlike '*Loopback*' -and $_.IPAddress -notlike '169.*'}).IPAddress | Select-Object -First 1
+          
+          Clear-Host
+          Write-Host "╔══════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+          Write-Host "║" -ForegroundColor Cyan -NoNewline; Write-Host "   🛸 DORKUTILS PRO - RDP READY 24/7               " -ForegroundColor White -NoNewline; Write-Host "║" -ForegroundColor Cyan
+          Write-Host "╠══════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
+          Write-Host "║" -ForegroundColor Cyan -NoNewline; Write-Host "                                                       " -NoNewline; Write-Host "║" -ForegroundColor Cyan
+          Write-Host "║" -ForegroundColor Cyan -NoNewline; Write-Host "   🖥️  HOST:     " -NoNewline; Write-Host "$hostname".PadRight(42) -ForegroundColor Green -NoNewline; Write-Host "║" -ForegroundColor Cyan
+          Write-Host "║" -ForegroundColor Cyan -NoNewline; Write-Host "   🌐 IP:       " -NoNewline; Write-Host "$ip".PadRight(42) -ForegroundColor Green -NoNewline; Write-Host "║" -ForegroundColor Cyan
+          Write-Host "║" -ForegroundColor Cyan -NoNewline; Write-Host "   👤 USER:     " -NoNewline; Write-Host "DORKUSER".PadRight(42) -ForegroundColor Green -NoNewline; Write-Host "║" -ForegroundColor Cyan
+          Write-Host "║" -ForegroundColor Cyan -NoNewline; Write-Host "   🔑 PASSWORD: " -NoNewline; Write-Host "$password".PadRight(42) -ForegroundColor Green -NoNewline; Write-Host "║" -ForegroundColor Cyan
+          Write-Host "║" -ForegroundColor Cyan -NoNewline; Write-Host "   ⏳ TIMEOUT:  " -NoNewline; Write-Host "${{ github.event.inputs.rdp_time || '360' }} minutes".PadRight(42) -ForegroundColor Yellow -NoNewline; Write-Host "║" -ForegroundColor Cyan
+          Write-Host "║" -ForegroundColor Cyan -NoNewline; Write-Host "                                                       " -NoNewline; Write-Host "║" -ForegroundColor Cyan
+          Write-Host "╠══════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
+          Write-Host "║" -ForegroundColor Cyan -NoNewline; Write-Host "   🔧 الأدوات المثبتة:"  -ForegroundColor Yellow -NoNewline; Write-Host "                                 ║" -ForegroundColor Cyan
+          Write-Host "║" -ForegroundColor Cyan -NoNewline; Write-Host "   ✅ Python 3.11         ✅ DorkUtils Pro        " -NoNewline; Write-Host "║" -ForegroundColor Cyan
+          Write-Host "║" -ForegroundColor Cyan -NoNewline; Write-Host "   ✅ Sample Dorks.txt    ✅ RDP Active           " -NoNewline; Write-Host "║" -ForegroundColor Cyan
+          Write-Host "║" -ForegroundColor Cyan -NoNewline; Write-Host "                                                       " -NoNewline; Write-Host "║" -ForegroundColor Cyan
+          Write-Host "╠══════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
+          Write-Host "║" -ForegroundColor Cyan -NoNewline; Write-Host "   📌 Connect via RDP:" -ForegroundColor Yellow -NoNewline; Write-Host "                                          ║" -ForegroundColor Cyan
+          Write-Host "║" -ForegroundColor Cyan -NoNewline; Write-Host "   1. Open Remote Desktop Connection (mstsc)        " -NoNewline; Write-Host "║" -ForegroundColor Cyan
+          Write-Host "║" -ForegroundColor Cyan -NoNewline; Write-Host "   2. Computer: $ip" -ForegroundColor Green -NoNewline; Write-Host "                                      ║" -ForegroundColor Cyan
+          Write-Host "║" -ForegroundColor Cyan -NoNewline; Write-Host "   3. Username: DORKUSER / Password: $password" -ForegroundColor Green -NoNewline; Write-Host "        ║" -ForegroundColor Cyan
+          Write-Host "║" -ForegroundColor Cyan -NoNewline; Write-Host "   4. On Desktop click 'DorkUtils Pro' shortcut    " -NoNewline; Write-Host "║" -ForegroundColor Cyan
+          Write-Host "║" -ForegroundColor Cyan -NoNewline; Write-Host "                                                       " -NoNewline; Write-Host "║" -ForegroundColor Cyan
+          Write-Host "╚══════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+          
+          # البقاء على قيد الحياة
+          $startTime = Get-Date
+          $timeoutMins = ${{ github.event.inputs.rdp_time || '360' }}
+          
+          while ($true) {
+              $elapsed = [math]::Round(((Get-Date) - $startTime).TotalMinutes, 1)
+              $remaining = [math]::Max(0, $timeoutMins - $elapsed)
+              Write-Host "[$(Get-Date -Format 'HH:mm:ss')] 🟢 RDP Active | 💻 DorkUtils Ready | ⏱️ ${elapsed}m elapsed / ${remaining}m remaining" -ForegroundColor Green
+              
+              if ($elapsed -ge $timeoutMins) {
+                  Write-Host "`n⏰ Timeout reached! RDP session ending..." -ForegroundColor Yellow
+                  break
+              }
+              Start-Sleep -Seconds 60
+          }
